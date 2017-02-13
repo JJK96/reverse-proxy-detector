@@ -6,6 +6,6 @@ ScreenVersion: 0.4
 SerialVersion: 1
 MinPlatformVersion: 0
 ProOnly: False
-Author: Nicolas Grégoire
+Author: Nicolas Gregoire
 ShortDescription: Detects reverse proxy servers.
 EntryPoint: HttpTraceroute.py
