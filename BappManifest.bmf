@@ -1,6 +1,7 @@
 Uuid: a112997070354d249b64b4cf68eabc04
 ExtensionType: 2
 Name: Reverse Proxy Detector
+RepoName: reverse-proxy-detector
 ScreenVersion: 0.4
 SerialVersion: 1
 MinPlatformVersion: 0
