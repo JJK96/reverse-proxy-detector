@@ -31,6 +31,10 @@ class TTLMethod(object):
         self.message = message
         self.parsed_request = parsed_request
 
+    @property
+    def body(self):
+        return self.message.getRequest()[self.parsed_request.getBodyOffset():]
+
     def first_request(self):
         # update the method
         self.new_headers = []
@@ -41,14 +45,13 @@ class TTLMethod(object):
                 self.new_headers.append(header)
 
         # fetch a (fresh) baseline response
-        self.base_body = self.message.getRequest()[self.parsed_request.getBodyOffset():]
-        return self._helpers.buildHttpMessage(self.new_headers, self.base_body)
+        return self._helpers.buildHttpMessage(self.new_headers, self.body)
 
     def second_request(self):
         # add the Max-Forwards header
         ttl_headers = self.new_headers + [ "Max-Forwards: 0" ]
 
-        return self._helpers.buildHttpMessage(ttl_headers, self.base_body)
+        return self._helpers.buildHttpMessage(ttl_headers, self.body)
 
     def __repr__(self):
         return "HTTP " + self.method
@@ -67,17 +70,41 @@ class UrlPostfixMethod(TTLMethod):
     def second_request(self):
         headers = [header for header in self.parsed_request.getHeaders()]
         header_split = headers[0].split(' ')
-        path, args = header_split[1].split('?')
+        path_and_args = header_split[1].split('?')
+        args = ""
+        path = path_and_args[0]
+        if len(path_and_args) > 1:
+            args = path_and_args[1]
         # Chop path after last /
         path = '/'.join(path.split('/')[:-1]) + '/'
         path += self.postfix
         header_split[1] = path + "?" + args
         headers[0] = ' '.join(header_split)
-        body = self.message.getRequest()[self.parsed_request.getBodyOffset():]
-        return self._helpers.buildHttpMessage(headers, body)
+        return self._helpers.buildHttpMessage(headers, self.body)
 
     def __repr__(self):
         return "Url Postfix " + self.postfix
+
+
+class RemoveHeader(TTLMethod):
+    def __init__(self, helpers, header, message, parsed_request):
+        self._helpers = helpers
+        self.message = message
+        self.parsed_request = parsed_request
+        self.header = header
+
+    def first_request(self):
+        return self.message.getRequest()
+
+    def second_request(self):
+        new_headers = []
+        for header in self.parsed_request.getHeaders():
+            if self.header not in header:
+                new_headers.append(header)
+        return self._helpers.buildHttpMessage(new_headers, self.body)
+
+    def __repr__(self):
+        return "Remove header " + self.header
 
 
 class BurpExtender(IBurpExtender, IContextMenuFactory):
@@ -170,6 +197,7 @@ class BurpExtender(IBurpExtender, IContextMenuFactory):
                 methods = [ TTLMethod(self._helpers, method, message, parsed_request) for method in http_methods]
                 methods.append(UrlPostfixMethod(self._helpers, "%00", message, parsed_request))
                 methods.append(UrlPostfixMethod(self._helpers, "%01", message, parsed_request))
+                methods.append(RemoveHeader(self._helpers, "Host", message, parsed_request))
 
                 # for each selected method
                 for method in methods:
