@@ -24,25 +24,27 @@ from javax.swing import JMenuItem
 from threading import Thread
 
 
-class Method(object):
-    def __init__(self, method, helpers):
+class TTLMethod(object):
+    def __init__(self, helpers, method, message, parsed_request):
         self.method = method
         self._helpers = helpers
+        self.message = message
+        self.parsed_request = parsed_request
 
-    def edit_request(self, message, parsed_request):
+    def first_request(self):
         # update the method
         self.new_headers = []
-        for header in parsed_request.getHeaders():
-            if parsed_request.getMethod() in header:
-                self.new_headers.append(header.replace(parsed_request.getMethod(), self.method))
+        for header in self.parsed_request.getHeaders():
+            if self.parsed_request.getMethod() in header:
+                self.new_headers.append(header.replace(self.parsed_request.getMethod(), self.method))
             else:
                 self.new_headers.append(header)
 
         # fetch a (fresh) baseline response
-        self.base_body = message.getRequest()[parsed_request.getBodyOffset():]
+        self.base_body = self.message.getRequest()[self.parsed_request.getBodyOffset():]
         return self._helpers.buildHttpMessage(self.new_headers, self.base_body)
 
-    def add_ttl_header(self):
+    def second_request(self):
         # add the Max-Forwards header
         ttl_headers = self.new_headers + [ "Max-Forwards: 0" ]
 
@@ -50,6 +52,32 @@ class Method(object):
 
     def __repr__(self):
         return "HTTP " + self.method
+
+
+class UrlPostfixMethod(TTLMethod):
+    def __init__(self, helpers, postfix, message, parsed_request):
+        self._helpers = helpers
+        self.message = message
+        self.parsed_request = parsed_request
+        self.postfix = postfix
+
+    def first_request(self):
+        return self.message.getRequest()
+
+    def second_request(self):
+        headers = [header for header in self.parsed_request.getHeaders()]
+        header_split = headers[0].split(' ')
+        path, args = header_split[1].split('?')
+        # Chop path after last /
+        path = '/'.join(path.split('/')[:-1]) + '/'
+        path += self.postfix
+        header_split[1] = path + "?" + args
+        headers[0] = ' '.join(header_split)
+        body = self.message.getRequest()[self.parsed_request.getBodyOffset():]
+        return self._helpers.buildHttpMessage(headers, body)
+
+    def __repr__(self):
+        return "Url Postfix " + self.postfix
 
 
 class BurpExtender(IBurpExtender, IContextMenuFactory):
@@ -138,24 +166,26 @@ class BurpExtender(IBurpExtender, IContextMenuFactory):
             if parsed_request.getMethod() not in http_methods:
                 http_methods.insert(0, parsed_request.getMethod())
 
-            methods = [ Method(method, self._helpers) for method in http_methods]
+            try:
+                methods = [ TTLMethod(self._helpers, method, message, parsed_request) for method in http_methods]
+                methods.append(UrlPostfixMethod(self._helpers, "%00", message, parsed_request))
+                methods.append(UrlPostfixMethod(self._helpers, "%01", message, parsed_request))
 
-            # for each selected method
-            for method in methods:
-                try:
+                # for each selected method
+                for method in methods:
                     self._stdout.println(str(method))
 
-                    base_request = method.edit_request(message, parsed_request)
-                    base_response = self._callbacks.makeHttpRequest(message.getHttpService(), base_request)
+                    first_request = method.first_request()
+                    first_response = self._callbacks.makeHttpRequest(message.getHttpService(), first_request)
 
-                    ttl_request = method.add_ttl_header()
-                    ttl_response = self._callbacks.makeHttpRequest(message.getHttpService(), ttl_request)
+                    second_request = method.second_request()
+                    second_response = self._callbacks.makeHttpRequest(message.getHttpService(), second_request)
 
                     # compare this response to the baseline
-                    self.compare_responses(method, base_response, ttl_response)
-                except Exception as e:
-                    self._stdout.println(e)
-                    raise
+                    self.compare_responses(method, first_response, second_response)
+            except Exception as e:
+                self._stdout.println(e)
+                raise
 
         return
 
@@ -194,10 +224,10 @@ class BurpExtender(IBurpExtender, IContextMenuFactory):
                 continue
             # header found only in the baseline
             if (not c in headers2) and (c in headers1):
-                findings.append("Header <b>%s</b> not present in traceroute response:<ul><li>Value in original response: %s</li></ul>" % (c, headers1[c]))
+                findings.append("Header <b>%s</b> not present in second response:<ul><li>Value in original response: %s</li></ul>" % (c, headers1[c]))
             # header found only in the traceroute response
             if (not c in headers1) and (c in headers2):
-                findings.append("Header <b>%s</b> not present in baseline response:<ul><li>Value in traceroute response: %s</li></ul>" % (c, headers2[c]))
+                findings.append("Header <b>%s</b> not present in baseline response:<ul><li>Value in second response: %s</li></ul>" % (c, headers2[c]))
             # header found in both but values are different
             if (c in headers1) and (c in headers2) and (headers1[c] != headers2[c]):
                 # do not compare cookies (false positive on session cookies)
@@ -217,7 +247,7 @@ class BurpExtender(IBurpExtender, IContextMenuFactory):
             if (value2 == None) and (value1 != None):
                 # extract only the 1st group, without newlines
                 x1 =  value1.groups()[0].strip('\r\n')
-                findings.append("String <b>%s</b> not present in traceroute response:<ul><li>Value in baseline response: %s</li></ul>" % (cgi.escape(pattern), x1))
+                findings.append("String <b>%s</b> not present in second response:<ul><li>Value in baseline response: %s</li></ul>" % (cgi.escape(pattern), x1))
             # string found only in the traceroute response
             if (value1 == None) and (value2 != None):
                 # extract only the 1st group, without newlines
